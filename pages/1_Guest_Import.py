@@ -59,32 +59,35 @@ st.write("A multi-step tool to clean, format, and validate your guest data.")
 
 uploaded_file = st.file_uploader("Upload your guest CSV file", type="csv")
 
-# --- UPDATED: Step 1 - Select Header Row ---
 if uploaded_file:
+    # --- CORRECTED Step 1: Confirm Header Row ---
     st.subheader("Step 1: Confirm Header Row")
     
     # Read the first 8 rows for the dropdown options
     uploaded_file.seek(0)
     preview_df = pd.read_csv(uploaded_file, header=None, nrows=8, dtype=str).fillna('')
     
-    # Create descriptive options for the dropdown
     options = []
     for index, row in preview_df.iterrows():
-        # Join the first 5 columns to create a preview string
         preview_text = ", ".join(row.iloc[:5].dropna().astype(str))
         options.append(f"Row {index + 1}: {preview_text}")
 
-    # Let user select the header row using the descriptive dropdown
+    # If a selection has been made before, use it as the default index
+    default_index = st.session_state.get('header_row_index', 0)
+
     selected_option = st.selectbox(
         "Please select the row that contains your headers",
         options=options,
-        index=0 # Default to the first row
+        index=default_index, # Use the stored index
+        key='header_selector' # Give the widget a key
     )
     
-    # Extract the chosen row number (1-based) from the selected option string
-    header_row_number = int(selected_option.split(':')[0].replace('Row ', ''))
+    # Store the index of the selection to prevent it from resetting
+    st.session_state.header_row_index = options.index(selected_option)
     
-    # Load the full dataframe using the selected header row (0-indexed)
+    header_row_number = st.session_state.header_row_index + 1
+    
+    # Load the full dataframe using the selected header row
     uploaded_file.seek(0)
     df = pd.read_csv(uploaded_file, header=header_row_number - 1, dtype=str).fillna('')
     st.session_state.original_df = df
@@ -94,7 +97,6 @@ if uploaded_file:
     st.dataframe(df.head(50))
 
 
-# --- Step 2: Handle 'Full Name' ---
 if 'original_df' in st.session_state:
     st.subheader("Step 2: Handle 'Full Name' (Optional)")
     df = st.session_state.original_df.copy()
@@ -109,7 +111,6 @@ if 'original_df' in st.session_state:
             st.info("✅ 'Full Name' has been split.")
     st.session_state.df_after_split = df
 
-# --- Step 3: Map Columns ---
 if 'df_after_split' in st.session_state:
     st.subheader("Step 3: Map Your Columns")
     df = st.session_state.df_after_split.copy()
@@ -145,7 +146,6 @@ if 'df_after_split' in st.session_state:
     df.rename(columns=manual_rename_dict, inplace=True)
     st.session_state.df_after_mapping = df
 
-# --- Step 4: Clarify Marketing Consent ---
 if 'df_after_mapping' in st.session_state:
     st.subheader("Step 4: Clarify Marketing Consent (Optional)")
     df = st.session_state.df_after_mapping.copy()
@@ -162,7 +162,6 @@ if 'df_after_mapping' in st.session_state:
                 if not st.session_state.treat_all_non_blank_as_true:
                     st.session_state.new_truthy_values = st.multiselect("OR, select specific values to add to the 'TRUE' list:", options=unknown_values)
 
-# --- Step 5: Combine Notes & Finalize ---
 if 'df_after_mapping' in st.session_state:
     st.subheader("Step 5: Combine Notes & Finalize")
     potential_notes_cols = [col for col, mapping in st.session_state.get('manual_mappings', {}).items() if mapping == "-- Leave Unmapped --"]
@@ -173,7 +172,7 @@ if 'df_after_mapping' in st.session_state:
     if st.button("🚀 Process, Clean, and Validate"):
         processed_df = st.session_state.df_after_mapping.copy()
         
-        # --- LEARNING & FORMATTING ---
+        # LEARNING & FORMATTING
         if 'new_truthy_values' in st.session_state and st.session_state.new_truthy_values:
             RENAMING_MAP["_truthy_values_for_emailMarketingOk"].extend(st.session_state.new_truthy_values)
             save_mappings(RENAMING_MAP)
@@ -196,7 +195,7 @@ if 'df_after_mapping' in st.session_state:
             if name_col in processed_df.columns:
                  processed_df[name_col] = processed_df[name_col].str.title()
         
-        # --- VALIDATION & DELETION ---
+        # VALIDATION & DELETION
         initial_rows = len(processed_df)
         if 'lastName' in processed_df.columns:
             processed_df = processed_df[processed_df['lastName'].str.strip() != '']
@@ -209,7 +208,7 @@ if 'df_after_mapping' in st.session_state:
         rows_deleted = initial_rows - len(processed_df)
         st.success(f"✅ Initial validation complete! **{rows_deleted}** invalid rows were deleted.")
 
-        # --- originalGuestId LOGIC ---
+        # originalGuestId LOGIC
         if 'originalGuestId' in processed_df.columns:
             initial_id_rows = len(processed_df)
             processed_df.dropna(subset=['originalGuestId'], inplace=True)
@@ -222,7 +221,7 @@ if 'df_after_mapping' in st.session_state:
             processed_df['originalGuestId'] = [uuid.uuid4().hex for _ in range(len(processed_df))]
             st.info("✅ Created a new 'originalGuestId' column with unique 32-character codes for each record.")
 
-        # --- DEDUPLICATION LOGIC ---
+        # DEDUPLICATION LOGIC
         initial_rows_dedup = len(processed_df)
         contact_cols_dedup = [col for col in ['email', 'phoneNumber', 'mobileNumber'] if col in processed_df.columns]
         for col in contact_cols_dedup:
@@ -245,7 +244,7 @@ if 'df_after_mapping' in st.session_state:
                 st.info(f"✨ Merged **{rows_merged}** duplicate rows based on name and contact info.")
             processed_df = deduplicated_df
 
-        # --- LEARNING COLUMN MAPPINGS ---
+        # LEARNING COLUMN MAPPINGS
         manual_rename_dict = {orig: new for orig, new in st.session_state.manual_mappings.items() if new != "-- Leave Unmapped --"}
         new_mappings_learned = False
         for original_name, standard_name in manual_rename_dict.items():
@@ -259,7 +258,7 @@ if 'df_after_mapping' in st.session_state:
             save_mappings(RENAMING_MAP)
             st.toast("🧠 Column mapping suggestions have been updated!")
             
-        # --- FINAL DOWNLOAD ---
+        # FINAL DOWNLOAD
         final_cols = [col for col in STANDARD_COLUMNS if col in processed_df.columns]
         final_df = processed_df[final_cols]
         
