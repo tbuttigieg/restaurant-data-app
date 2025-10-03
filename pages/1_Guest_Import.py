@@ -59,40 +59,46 @@ st.write("A multi-step tool to clean, format, and validate your guest data.")
 
 uploaded_file = st.file_uploader("Upload your guest CSV file", type="csv")
 
-# --- NEW: Step 1 - Select Header Row ---
+# --- UPDATED: Step 1 - Select Header Row ---
 if uploaded_file:
-    # Show a raw preview first
     st.subheader("Step 1: Confirm Header Row")
     
-    # Read a few lines for preview without headers
+    # Read the first 8 rows for the dropdown options
     uploaded_file.seek(0)
-    preview_df = pd.read_csv(uploaded_file, header=None, nrows=10)
-    st.dataframe(preview_df)
+    preview_df = pd.read_csv(uploaded_file, header=None, nrows=8, dtype=str).fillna('')
     
-    # Let user select the header row (1-based index)
-    header_row = st.number_input(
-        "Which row contains the column headers? (e.g., 1, 2, 3...)",
-        min_value=1,
-        max_value=10,
-        value=2, # Default to 2 based on user's example
-        step=1
+    # Create descriptive options for the dropdown
+    options = []
+    for index, row in preview_df.iterrows():
+        # Join the first 5 columns to create a preview string
+        preview_text = ", ".join(row.iloc[:5].dropna().astype(str))
+        options.append(f"Row {index + 1}: {preview_text}")
+
+    # Let user select the header row using the descriptive dropdown
+    selected_option = st.selectbox(
+        "Please select the row that contains your headers",
+        options=options,
+        index=0 # Default to the first row
     )
     
-    # Load the dataframe using the selected header row
+    # Extract the chosen row number (1-based) from the selected option string
+    header_row_number = int(selected_option.split(':')[0].replace('Row ', ''))
+    
+    # Load the full dataframe using the selected header row (0-indexed)
     uploaded_file.seek(0)
-    df = pd.read_csv(uploaded_file, header=header_row - 1, dtype=str).fillna('')
+    df = pd.read_csv(uploaded_file, header=header_row_number - 1, dtype=str).fillna('')
     st.session_state.original_df = df
     st.session_state.original_filename = uploaded_file.name
     
     st.subheader("Data Preview with Correct Headers (First 50 Rows)")
     st.dataframe(df.head(50))
 
+
 # --- Step 2: Handle 'Full Name' ---
 if 'original_df' in st.session_state:
     st.subheader("Step 2: Handle 'Full Name' (Optional)")
     df = st.session_state.original_df.copy()
     with st.expander("Expand if your file has a combined 'Full Name' column"):
-        # ... (rest of the logic is unchanged)
         name_col_to_split = st.selectbox("Select the column containing the full name", options=["-- None --"] + df.columns.tolist())
         if name_col_to_split != "-- None --":
             split_full_name(df, name_col_to_split)
@@ -106,7 +112,6 @@ if 'original_df' in st.session_state:
 # --- Step 3: Map Columns ---
 if 'df_after_split' in st.session_state:
     st.subheader("Step 3: Map Your Columns")
-    # ... (rest of the logic is unchanged)
     df = st.session_state.df_after_split.copy()
     if 'manual_mappings' not in st.session_state: st.session_state.manual_mappings = {}
     
@@ -140,11 +145,9 @@ if 'df_after_split' in st.session_state:
     df.rename(columns=manual_rename_dict, inplace=True)
     st.session_state.df_after_mapping = df
 
-
 # --- Step 4: Clarify Marketing Consent ---
 if 'df_after_mapping' in st.session_state:
     st.subheader("Step 4: Clarify Marketing Consent (Optional)")
-    # ... (rest of the logic is unchanged)
     df = st.session_state.df_after_mapping.copy()
     
     if 'emailMarketingOk' in df.columns:
@@ -159,11 +162,9 @@ if 'df_after_mapping' in st.session_state:
                 if not st.session_state.treat_all_non_blank_as_true:
                     st.session_state.new_truthy_values = st.multiselect("OR, select specific values to add to the 'TRUE' list:", options=unknown_values)
 
-
 # --- Step 5: Combine Notes & Finalize ---
 if 'df_after_mapping' in st.session_state:
     st.subheader("Step 5: Combine Notes & Finalize")
-    # ... (rest of the logic is unchanged)
     potential_notes_cols = [col for col, mapping in st.session_state.get('manual_mappings', {}).items() if mapping == "-- Leave Unmapped --"]
     notes_cols_to_combine = st.multiselect("Select columns to combine into 'guestNotes'", options=potential_notes_cols)
     
@@ -291,7 +292,7 @@ if 'df_after_mapping' in st.session_state:
                 
                 new_filename = f"{rid}_CLEANED.csv"
                 st.download_button(
-                    label="⬇️ Download Cleaned Data CSV",
+                    label="⬇️ Download Cleaned Guest Data",
                     data=csv_buffer.getvalue(),
                     file_name=new_filename,
                     mime="text/csv"
