@@ -59,43 +59,46 @@ st.write("A multi-step tool to clean, format, and validate your guest data.")
 
 uploaded_file = st.file_uploader("Upload your guest CSV file", type="csv")
 
+# --- CORRECTED Step 1: Confirm Header Row ---
 if uploaded_file:
-    # --- CORRECTED Step 1: Confirm Header Row ---
     st.subheader("Step 1: Confirm Header Row")
-    
-    # Read the first 8 rows for the dropdown options
-    uploaded_file.seek(0)
-    preview_df = pd.read_csv(uploaded_file, header=None, nrows=8, dtype=str).fillna('')
-    
+
+    # Only create the preview dataframe once per file
+    if 'preview_df' not in st.session_state or st.session_state.get('uploaded_filename') != uploaded_file.name:
+        uploaded_file.seek(0)
+        st.session_state.preview_df = pd.read_csv(uploaded_file, header=None, nrows=8, dtype=str).fillna('')
+        st.session_state.uploaded_filename = uploaded_file.name
+        # Reset header index if a new file is uploaded
+        if 'header_row_index' in st.session_state:
+            del st.session_state['header_row_index']
+
     options = []
-    for index, row in preview_df.iterrows():
+    for index, row in st.session_state.preview_df.iterrows():
         preview_text = ", ".join(row.iloc[:5].dropna().astype(str))
         options.append(f"Row {index + 1}: {preview_text}")
 
-    # If a selection has been made before, use it as the default index
+    # Use the session_state to remember the selection
     default_index = st.session_state.get('header_row_index', 0)
 
     selected_option = st.selectbox(
         "Please select the row that contains your headers",
         options=options,
-        index=default_index, # Use the stored index
-        key='header_selector' # Give the widget a key
+        index=default_index, # Use the stored index to prevent resetting
+        key='header_selector'
     )
-    
-    # Store the index of the selection to prevent it from resetting
+
+    # Store the user's choice in session_state so it persists across reruns
     st.session_state.header_row_index = options.index(selected_option)
-    
     header_row_number = st.session_state.header_row_index + 1
-    
-    # Load the full dataframe using the selected header row
+
+    # Load the main dataframe using the REMEMBERED header row
     uploaded_file.seek(0)
     df = pd.read_csv(uploaded_file, header=header_row_number - 1, dtype=str).fillna('')
     st.session_state.original_df = df
     st.session_state.original_filename = uploaded_file.name
-    
+
     st.subheader("Data Preview with Correct Headers (First 50 Rows)")
     st.dataframe(df.head(50))
-
 
 if 'original_df' in st.session_state:
     st.subheader("Step 2: Handle 'Full Name' (Optional)")
