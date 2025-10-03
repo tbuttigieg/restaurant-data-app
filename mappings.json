@@ -1,0 +1,93 @@
+{
+  "_truthy_values_for_emailMarketingOk": [
+    "yes",
+    "true",
+    "1",
+    "y",
+    "sure"
+  ],
+  "firstName": {
+    "First Name": 3,
+    "FirstName": 3,
+    "first_name": 3,
+    "FNAME": 3
+  },
+  "lastName": {
+    "Last Name": 3,
+    "LastName": 3,
+    "last_name": 3,
+    "Surname": 3,
+    "LNAME": 3
+  },
+  "email": {
+    "Email Address": 3,
+    "email_address": 3,
+    "E-Mail": 3,
+    "Email": 3
+  },
+  "phoneNumber": {
+    "Phone Number": 3,
+    "phone_number": 3,
+    "Phone": 3
+  },
+  "mobileNumber": {
+    "Mobile Number": 3,
+    "mobile_number": 3,
+    "Mobile": 3
+  },
+  "guestNotes": {
+    "Guest Notes": 3,
+    "Notes": 3,
+    "Comments": 3
+  },
+  "emailMarketingOk": {
+    "Email Marketing OK": 3,
+    "Marketing OK": 3,
+    "Opt-in": 3,
+    "Email Marketing": 3
+  },
+  "companyName": {
+    "Company Name": 3,
+    "Company": 3
+  },
+  "address1": {
+    "Address 1": 3,
+    "Street Address": 3
+  },
+  "address2": {
+    "Address 2": 3,
+    "Apartment": 3,
+    "Suite": 3
+  },
+  "city": {
+    "City": 3
+  },
+  "state": {
+    "State": 3,
+    "Province": 3
+  },
+  "country": {
+    "Country": 3
+  },
+  "zipCode": {
+    "Zip Code": 3,
+    "Postal Code": 3,
+    "Zip": 3
+  },
+  "dateOfBirth": {
+    "Date of Birth": 3,
+    "DOB": 3
+  },
+  "dateOfAnniversary": {
+    "Anniversary": 3
+  },
+  "fullName": {
+    "Full Name": 3,
+    "Name": 3
+  },
+  "originalGuestId": {
+    "Original Guest ID": 3,
+    "Guest ID": 3,
+    "Original ID": 3
+  }
+}
