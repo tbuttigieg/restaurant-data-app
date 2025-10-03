@@ -26,7 +26,16 @@ def load_mappings():
                 mappings[key] = {item: MAPPING_CONFIRMATION_THRESHOLD for item in value}
         return mappings
     except (FileNotFoundError, json.JSONDecodeError):
-        return {"_truthy_values_for_emailMarketingOk": ["yes", "true", "1", "y"]}
+        # If file is missing or corrupt, create a default one
+        default_mappings = {
+            "_truthy_values_for_emailMarketingOk": ["yes", "true", "1", "y"],
+            "firstName": {"First Name": 3, "FirstName": 3},
+            "lastName": {"Last Name": 3, "LastName": 3, "Surname": 3}
+            # Add other defaults as needed
+        }
+        with open(MAPPINGS_FILE, 'w') as f:
+            json.dump(default_mappings, f, indent=2)
+        return default_mappings
 
 def save_mappings(mappings):
     """Saves updated mappings back to the JSON file."""
@@ -59,20 +68,20 @@ st.write("A multi-step tool to clean, format, and validate your guest data.")
 
 uploaded_file = st.file_uploader("Upload your guest CSV file", type="csv")
 
-if uploaded_file:
-    # --- CORRECTED STATE RESET ---
-    # If it's a new file, reset the entire workflow state to start fresh
-    if st.session_state.get('uploaded_filename') != uploaded_file.name:
-        keys_to_reset = [
-            'preview_df', 'uploaded_filename', 'header_row_index',
-            'original_df', 'df_after_split', 'df_after_mapping', 'manual_mappings'
-        ]
-        for key in keys_to_reset:
-            if key in st.session_state:
-                del st.session_state[key]
-        st.session_state.uploaded_filename = uploaded_file.name
+# --- NEW: Robust State Reset Logic ---
+# If a new file is uploaded, reset the entire state to start fresh
+if uploaded_file and st.session_state.get('uploaded_filename') != uploaded_file.name:
+    keys_to_reset = [
+        'preview_df', 'header_confirmed', 'original_df', 'df_after_split',
+        'df_after_mapping', 'manual_mappings', 'header_row_index'
+    ]
+    for key in keys_to_reset:
+        if key in st.session_state:
+            del st.session_state[key]
+    st.session_state.uploaded_filename = uploaded_file.name
 
-    # --- Step 1: Confirm Header Row ---
+# --- Step 1: Confirm Header Row ---
+if uploaded_file:
     st.subheader("Step 1: Confirm Header Row")
 
     if 'preview_df' not in st.session_state:
@@ -84,45 +93,46 @@ if uploaded_file:
         preview_text = ", ".join(row.iloc[:5].dropna().astype(str))
         options.append(f"Row {index + 1}: {preview_text}")
 
-    default_index = st.session_state.get('header_row_index', 0)
-
     selected_option = st.selectbox(
         "Please select the row that contains your headers",
         options=options,
-        index=default_index,
+        index=st.session_state.get('header_row_index', 0),
         key='header_selector'
     )
     
+    # Store the index so the dropdown doesn't reset on its own
     st.session_state.header_row_index = options.index(selected_option)
-    header_row_number = st.session_state.header_row_index + 1
-    
-    uploaded_file.seek(0)
-    df = pd.read_csv(uploaded_file, header=header_row_number - 1, dtype=str).fillna('')
-    st.session_state.original_df = df
-    
-    st.subheader("Data Preview with Correct Headers (First 50 Rows)")
-    st.dataframe(df.head(50))
 
-# --- Step 2: Handle 'Full Name' ---
-if 'original_df' in st.session_state:
+    if st.button("Confirm Header and Continue"):
+        header_row_number = st.session_state.header_row_index + 1
+        uploaded_file.seek(0)
+        df = pd.read_csv(uploaded_file, header=header_row_number - 1, dtype=str).fillna('')
+        st.session_state.original_df = df
+        st.session_state.header_confirmed = True # Lock in the confirmation
+        st.rerun() # Rerun the script to show the next steps
+
+# --- All Subsequent Steps only appear AFTER header is confirmed ---
+if st.session_state.get('header_confirmed'):
+    st.subheader("Data Preview (First 50 Rows)")
+    st.dataframe(st.session_state.original_df.head(50))
+    
+    # --- Step 2: Handle 'Full Name' ---
     st.subheader("Step 2: Handle 'Full Name' (Optional)")
-    df = st.session_state.original_df.copy()
+    df_step1 = st.session_state.original_df.copy()
     with st.expander("Expand if your file has a combined 'Full Name' column"):
-        name_col_to_split = st.selectbox("Select the column containing the full name", options=["-- None --"] + df.columns.tolist())
+        name_col_to_split = st.selectbox("Select the column containing the full name", options=["-- None --"] + df_step1.columns.tolist())
         if name_col_to_split != "-- None --":
-            split_full_name(df, name_col_to_split)
-            if 'firstName' not in df.columns: df['firstName'] = ''
-            if 'lastName' not in df.columns: df['lastName'] = ''
-            df['firstName'] = df['firstName'].replace('', pd.NA).fillna(df['firstName_from_split'])
-            df['lastName'] = df['lastName'].replace('', pd.NA).fillna(df['lastName_from_split'])
+            split_full_name(df_step1, name_col_to_split)
+            if 'firstName' not in df_step1.columns: df_step1['firstName'] = ''
+            if 'lastName' not in df_step1.columns: df_step1['lastName'] = ''
+            df_step1['firstName'] = df_step1['firstName'].replace('', pd.NA).fillna(df_step1.get('firstName_from_split'))
+            df_step1['lastName'] = df_step1['lastName'].replace('', pd.NA).fillna(df_step1.get('lastName_from_split'))
             st.info("✅ 'Full Name' has been split.")
-    st.session_state.df_after_split = df
+    st.session_state.df_after_split = df_step1
 
-# --- Step 3: Map Columns ---
-if 'df_after_split' in st.session_state:
+    # --- Step 3: Map Columns ---
     st.subheader("Step 3: Map Your Columns")
-    df = st.session_state.df_after_split.copy()
-    # Ensure manual_mappings is initialized for this session
+    df_step2 = st.session_state.df_after_split.copy()
     st.session_state.manual_mappings = st.session_state.get('manual_mappings', {})
     
     reversed_map = {}
@@ -132,17 +142,16 @@ if 'df_after_split' in st.session_state:
                 if count >= MAPPING_CONFIRMATION_THRESHOLD:
                     reversed_map[var.lower()] = std
     
-    auto_rename_dict = {col: reversed_map[col.lower()] for col in df.columns if col.lower() in reversed_map}
+    auto_rename_dict = {col: reversed_map[col.lower()] for col in df_step2.columns if col.lower() in reversed_map}
     
-    st.info(f"✅ Automatically mapped **{len(auto_rename_dict)}** columns based on confirmed rules.")
+    st.info(f"✅ Automatically mapped **{len(auto_rename_dict)}** columns.")
     if auto_rename_dict:
         with st.expander("Click here to see the automatically mapped columns"):
-            mapping_df = pd.DataFrame(list(auto_rename_dict.items()), columns=['Your Column', 'Mapped To'])
-            st.table(mapping_df)
-
-    df.rename(columns=auto_rename_dict, inplace=True)
+            st.table(pd.DataFrame(list(auto_rename_dict.items()), columns=['Your Column', 'Mapped To']))
     
-    unmapped_columns = [col for col in df.columns if col not in STANDARD_COLUMNS]
+    df_step2.rename(columns=auto_rename_dict, inplace=True)
+    
+    unmapped_columns = [col for col in df_step2.columns if col not in STANDARD_COLUMNS]
     if unmapped_columns:
         st.warning(f"Map any remaining columns. Unmapped columns will be available for 'Guest Notes' in the next step.")
         cols = st.columns(3)
@@ -151,18 +160,15 @@ if 'df_after_split' in st.session_state:
                 options = ["-- Leave Unmapped --"] + MANUAL_MAPPING_OPTIONS
                 st.session_state.manual_mappings[col_name] = st.selectbox(f"Map '**{col_name}**'", options, key=f"map_{col_name}")
     
-    manual_rename_dict = {orig: new for orig, new in st.session_state.manual_mappings.items() if new != "-- Leave Unmapped --"}
-    df.rename(columns=manual_rename_dict, inplace=True)
-    st.session_state.df_after_mapping = df
+    # This df is now the basis for the final processing button
+    st.session_state.df_after_mapping_display = df_step2
 
-# --- Step 4: Clarify Marketing Consent ---
-if 'df_after_mapping' in st.session_state:
+    # --- Step 4: Clarify Marketing Consent ---
     st.subheader("Step 4: Clarify Marketing Consent (Optional)")
-    df = st.session_state.df_after_mapping.copy()
-    
-    if 'emailMarketingOk' in df.columns:
+    df_step3 = st.session_state.df_after_mapping_display.copy()
+    if 'emailMarketingOk' in df_step3.columns:
         truthy_values = [str(v).lower() for v in RENAMING_MAP.get("_truthy_values_for_emailMarketingOk", [])]
-        unique_values = df['emailMarketingOk'].str.lower().str.strip().replace('', pd.NA).dropna().unique()
+        unique_values = df_step3['emailMarketingOk'].str.lower().str.strip().replace('', pd.NA).dropna().unique()
         unknown_values = [v for v in unique_values if v not in truthy_values]
         
         if unknown_values:
@@ -172,18 +178,26 @@ if 'df_after_mapping' in st.session_state:
                 if not st.session_state.treat_all_non_blank_as_true:
                     st.session_state.new_truthy_values = st.multiselect("OR, select specific values to add to the 'TRUE' list:", options=unknown_values)
 
-# --- Step 5: Combine Notes & Finalize ---
-if 'df_after_mapping' in st.session_state:
+    # --- Step 5: Combine Notes & Finalize ---
     st.subheader("Step 5: Combine Notes & Finalize")
-    potential_notes_cols = [col for col, mapping in st.session_state.get('manual_mappings', {}).items() if mapping == "-- Leave Unmapped --"]
+    # Use the correctly mapped dataframe to find potential notes
+    potential_notes_cols = [
+        col for col in st.session_state.df_after_mapping_display.columns
+        if col not in STANDARD_COLUMNS
+    ]
     notes_cols_to_combine = st.multiselect("Select columns to combine into 'guestNotes'", options=potential_notes_cols)
-    
     rid = st.text_input("Enter your Restaurant ID (RID) for the output filename")
 
     if st.button("🚀 Process, Clean, and Validate"):
-        processed_df = st.session_state.df_after_mapping.copy()
+        # Start with the fully mapped df from before this step
+        processed_df = st.session_state.df_after_mapping_display.copy()
+
+        # Re-apply manual mappings from the session state widgets
+        manual_rename_dict = {orig: new for orig, new in st.session_state.manual_mappings.items() if new != "-- Leave Unmapped --"}
+        processed_df.rename(columns=manual_rename_dict, inplace=True)
         
         # --- LEARNING & FORMATTING (Full Code) ---
+        # (This section is unchanged, but included for completeness)
         if 'new_truthy_values' in st.session_state and st.session_state.new_truthy_values:
             RENAMING_MAP["_truthy_values_for_emailMarketingOk"].extend(st.session_state.new_truthy_values)
             save_mappings(RENAMING_MAP)
@@ -204,6 +218,7 @@ if 'df_after_mapping' in st.session_state:
                  processed_df[name_col] = processed_df[name_col].str.title()
         
         # --- VALIDATION & DELETION (Full Code) ---
+        # (This section is unchanged, but included for completeness)
         initial_rows = len(processed_df)
         if 'lastName' in processed_df.columns:
             processed_df = processed_df[processed_df['lastName'].str.strip() != '']
@@ -217,6 +232,7 @@ if 'df_after_mapping' in st.session_state:
         st.success(f"✅ Initial validation complete! **{rows_deleted}** invalid rows were deleted.")
 
         # --- originalGuestId LOGIC (Full Code) ---
+        # (This section is unchanged, but included for completeness)
         if 'originalGuestId' in processed_df.columns:
             initial_id_rows = len(processed_df)
             processed_df.dropna(subset=['originalGuestId'], inplace=True)
@@ -230,6 +246,7 @@ if 'df_after_mapping' in st.session_state:
             st.info("✅ Created a new 'originalGuestId' column with unique 32-character codes for each record.")
 
         # --- DEDUPLICATION LOGIC (Full Code) ---
+        # (This section is unchanged, but included for completeness)
         initial_rows_dedup = len(processed_df)
         contact_cols_dedup = [col for col in ['email', 'phoneNumber', 'mobileNumber'] if col in processed_df.columns]
         for col in contact_cols_dedup:
@@ -250,9 +267,10 @@ if 'df_after_mapping' in st.session_state:
             processed_df = deduplicated_df
 
         # --- LEARNING COLUMN MAPPINGS (Full Code) ---
-        manual_rename_dict = {orig: new for orig, new in st.session_state.manual_mappings.items() if new != "-- Leave Unmapped --"}
+        # (This section is unchanged, but included for completeness)
+        manual_rename_dict_final = {orig: new for orig, new in st.session_state.manual_mappings.items() if new != "-- Leave Unmapped --"}
         new_mappings_learned = False
-        for original_name, standard_name in manual_rename_dict.items():
+        for original_name, standard_name in manual_rename_dict_final.items():
             if standard_name not in RENAMING_MAP or not isinstance(RENAMING_MAP[standard_name], dict):
                 RENAMING_MAP[standard_name] = {}
             current_count = RENAMING_MAP[standard_name].get(original_name, 0)
@@ -263,6 +281,7 @@ if 'df_after_mapping' in st.session_state:
             st.toast("🧠 Column mapping suggestions have been updated!")
             
         # --- FINAL DOWNLOAD (Full Code) ---
+        # (This section is unchanged, but included for completeness)
         final_cols = [col for col in STANDARD_COLUMNS if col in processed_df.columns]
         final_df = processed_df[final_cols]
         st.subheader("Final Processed Data")
