@@ -59,17 +59,40 @@ st.write("A multi-step tool to clean, format, and validate your guest data.")
 
 uploaded_file = st.file_uploader("Upload your guest CSV file", type="csv")
 
+# --- NEW: Step 1 - Select Header Row ---
 if uploaded_file:
-    df = pd.read_csv(uploaded_file, dtype=str).fillna('')
+    # Show a raw preview first
+    st.subheader("Step 1: Confirm Header Row")
+    
+    # Read a few lines for preview without headers
+    uploaded_file.seek(0)
+    preview_df = pd.read_csv(uploaded_file, header=None, nrows=10)
+    st.dataframe(preview_df)
+    
+    # Let user select the header row (1-based index)
+    header_row = st.number_input(
+        "Which row contains the column headers? (e.g., 1, 2, 3...)",
+        min_value=1,
+        max_value=10,
+        value=2, # Default to 2 based on user's example
+        step=1
+    )
+    
+    # Load the dataframe using the selected header row
+    uploaded_file.seek(0)
+    df = pd.read_csv(uploaded_file, header=header_row - 1, dtype=str).fillna('')
     st.session_state.original_df = df
     st.session_state.original_filename = uploaded_file.name
-    st.subheader("Raw Data Preview (First 50 Rows)")
+    
+    st.subheader("Data Preview with Correct Headers (First 50 Rows)")
     st.dataframe(df.head(50))
 
+# --- Step 2: Handle 'Full Name' ---
 if 'original_df' in st.session_state:
-    st.subheader("Step 1: Handle 'Full Name' (Optional)")
+    st.subheader("Step 2: Handle 'Full Name' (Optional)")
     df = st.session_state.original_df.copy()
     with st.expander("Expand if your file has a combined 'Full Name' column"):
+        # ... (rest of the logic is unchanged)
         name_col_to_split = st.selectbox("Select the column containing the full name", options=["-- None --"] + df.columns.tolist())
         if name_col_to_split != "-- None --":
             split_full_name(df, name_col_to_split)
@@ -80,8 +103,10 @@ if 'original_df' in st.session_state:
             st.info("✅ 'Full Name' has been split.")
     st.session_state.df_after_split = df
 
+# --- Step 3: Map Columns ---
 if 'df_after_split' in st.session_state:
-    st.subheader("Step 2: Map Your Columns")
+    st.subheader("Step 3: Map Your Columns")
+    # ... (rest of the logic is unchanged)
     df = st.session_state.df_after_split.copy()
     if 'manual_mappings' not in st.session_state: st.session_state.manual_mappings = {}
     
@@ -115,8 +140,11 @@ if 'df_after_split' in st.session_state:
     df.rename(columns=manual_rename_dict, inplace=True)
     st.session_state.df_after_mapping = df
 
+
+# --- Step 4: Clarify Marketing Consent ---
 if 'df_after_mapping' in st.session_state:
-    st.subheader("Step 3: Clarify Marketing Consent (Optional)")
+    st.subheader("Step 4: Clarify Marketing Consent (Optional)")
+    # ... (rest of the logic is unchanged)
     df = st.session_state.df_after_mapping.copy()
     
     if 'emailMarketingOk' in df.columns:
@@ -131,33 +159,106 @@ if 'df_after_mapping' in st.session_state:
                 if not st.session_state.treat_all_non_blank_as_true:
                     st.session_state.new_truthy_values = st.multiselect("OR, select specific values to add to the 'TRUE' list:", options=unknown_values)
 
+
+# --- Step 5: Combine Notes & Finalize ---
 if 'df_after_mapping' in st.session_state:
-    st.subheader("Step 4: Combine Notes & Finalize")
+    st.subheader("Step 5: Combine Notes & Finalize")
+    # ... (rest of the logic is unchanged)
     potential_notes_cols = [col for col, mapping in st.session_state.get('manual_mappings', {}).items() if mapping == "-- Leave Unmapped --"]
     notes_cols_to_combine = st.multiselect("Select columns to combine into 'guestNotes'", options=potential_notes_cols)
     
-    # --- NEW: Get Restaurant ID ---
     rid = st.text_input("Enter your Restaurant ID (RID) for the output filename")
 
     if st.button("🚀 Process, Clean, and Validate"):
         processed_df = st.session_state.df_after_mapping.copy()
         
         # --- LEARNING & FORMATTING ---
-        # ... (This logic is unchanged)
+        if 'new_truthy_values' in st.session_state and st.session_state.new_truthy_values:
+            RENAMING_MAP["_truthy_values_for_emailMarketingOk"].extend(st.session_state.new_truthy_values)
+            save_mappings(RENAMING_MAP)
+            st.toast("🧠 New marketing consent values learned and saved!")
+        
+        final_truthy_values = [str(v).lower() for v in RENAMING_MAP.get("_truthy_values_for_emailMarketingOk", [])]
+
+        if 'emailMarketingOk' in processed_df.columns:
+            if st.session_state.get('treat_all_non_blank_as_true', False):
+                processed_df['emailMarketingOk'] = processed_df['emailMarketingOk'].str.strip().ne('')
+            else:
+                processed_df['emailMarketingOk'] = processed_df['emailMarketingOk'].str.lower().isin(final_truthy_values)
+
+        if notes_cols_to_combine:
+            processed_df['guestNotes'] = processed_df[notes_cols_to_combine].apply(lambda x: ', '.join(x.dropna().astype(str).str.strip().replace('', None).dropna().unique()), axis=1)
+        for date_col in ['dateOfBirth', 'dateOfAnniversary']:
+            if date_col in processed_df.columns:
+                processed_df[date_col] = pd.to_datetime(processed_df[date_col], errors='coerce').dt.strftime('%Y-%m-%d')
+        for name_col in ['firstName', 'lastName']:
+            if name_col in processed_df.columns:
+                 processed_df[name_col] = processed_df[name_col].str.title()
         
         # --- VALIDATION & DELETION ---
-        # ... (This logic is unchanged)
+        initial_rows = len(processed_df)
+        if 'lastName' in processed_df.columns:
+            processed_df = processed_df[processed_df['lastName'].str.strip() != '']
+        else:
+            processed_df = processed_df.iloc[0:0]
+        contact_cols = [col for col in ['email', 'phoneNumber', 'mobileNumber'] if col in processed_df.columns]
+        if contact_cols:
+            all_contacts_blank_mask = processed_df[contact_cols].apply(lambda x: x.str.strip().eq('')).all(axis=1)
+            processed_df = processed_df[~all_contacts_blank_mask]
+        rows_deleted = initial_rows - len(processed_df)
+        st.success(f"✅ Initial validation complete! **{rows_deleted}** invalid rows were deleted.")
 
         # --- originalGuestId LOGIC ---
-        # ... (This logic is unchanged)
+        if 'originalGuestId' in processed_df.columns:
+            initial_id_rows = len(processed_df)
+            processed_df.dropna(subset=['originalGuestId'], inplace=True)
+            processed_df = processed_df[processed_df['originalGuestId'].str.strip() != '']
+            processed_df.drop_duplicates(subset=['originalGuestId'], keep='first', inplace=True)
+            ids_deleted = initial_id_rows - len(processed_df)
+            if ids_deleted > 0:
+                st.warning(f"🚨 Deleted **{ids_deleted}** rows with blank or duplicate 'originalGuestId' values.")
+        else:
+            processed_df['originalGuestId'] = [uuid.uuid4().hex for _ in range(len(processed_df))]
+            st.info("✅ Created a new 'originalGuestId' column with unique 32-character codes for each record.")
 
         # --- DEDUPLICATION LOGIC ---
-        # ... (This logic is unchanged)
+        initial_rows_dedup = len(processed_df)
+        contact_cols_dedup = [col for col in ['email', 'phoneNumber', 'mobileNumber'] if col in processed_df.columns]
+        for col in contact_cols_dedup:
+            processed_df[col] = processed_df[col].str.strip().replace('', pd.NA)
+
+        processed_df['dedup_key'] = processed_df['email'].fillna(processed_df.get('phoneNumber')).fillna(processed_df.get('mobileNumber'))
+        
+        agg_rules = {}
+        for col in processed_df.columns:
+            if col not in ['firstName', 'lastName', 'dedup_key']:
+                if col == 'emailMarketingOk': agg_rules[col] = 'max'
+                elif col == 'guestNotes': agg_rules[col] = lambda x: ', '.join(x.dropna().astype(str).unique())
+                else: agg_rules[col] = 'first'
+        
+        if 'firstName' in processed_df.columns and 'lastName' in processed_df.columns and 'dedup_key' in processed_df.columns:
+            deduplicated_df = processed_df.groupby(['firstName', 'lastName', 'dedup_key'], as_index=False).agg(agg_rules)
+            deduplicated_df.drop(columns=['dedup_key'], inplace=True, errors='ignore')
+            rows_merged = initial_rows_dedup - len(deduplicated_df)
+            if rows_merged > 0:
+                st.info(f"✨ Merged **{rows_merged}** duplicate rows based on name and contact info.")
+            processed_df = deduplicated_df
 
         # --- LEARNING COLUMN MAPPINGS ---
-        # ... (This logic is unchanged)
+        manual_rename_dict = {orig: new for orig, new in st.session_state.manual_mappings.items() if new != "-- Leave Unmapped --"}
+        new_mappings_learned = False
+        for original_name, standard_name in manual_rename_dict.items():
+            if standard_name not in RENAMING_MAP or not isinstance(RENAMING_MAP[standard_name], dict):
+                RENAMING_MAP[standard_name] = {}
+            current_count = RENAMING_MAP[standard_name].get(original_name, 0)
+            RENAMING_MAP[standard_name][original_name] = current_count + 1
+            new_mappings_learned = True
+        
+        if new_mappings_learned:
+            save_mappings(RENAMING_MAP)
+            st.toast("🧠 Column mapping suggestions have been updated!")
             
-        # --- NEW: FINAL DOWNLOAD LOGIC ---
+        # --- FINAL DOWNLOAD ---
         final_cols = [col for col in STANDARD_COLUMNS if col in processed_df.columns]
         final_df = processed_df[final_cols]
         
@@ -168,12 +269,10 @@ if 'df_after_mapping' in st.session_state:
             st.error("Please enter a Restaurant ID (RID) to generate the download file.")
         else:
             if len(final_df) > FILE_ROW_LIMIT:
-                # --- Scenario A: Create a ZIP file for multiple CSVs ---
                 st.warning(f"Data has {len(final_df)} rows. It will be split into multiple files.")
                 
                 zip_buffer = io.BytesIO()
                 with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-                    # Split dataframe into chunks
                     num_chunks = (len(final_df) // FILE_ROW_LIMIT) + 1
                     for i in range(num_chunks):
                         chunk = final_df.iloc[i*FILE_ROW_LIMIT:(i+1)*FILE_ROW_LIMIT]
@@ -187,7 +286,6 @@ if 'df_after_mapping' in st.session_state:
                     mime="application/zip"
                 )
             else:
-                # --- Scenario B: Create a single CSV ---
                 csv_buffer = io.StringIO()
                 final_df.to_csv(csv_buffer, index=False)
                 
