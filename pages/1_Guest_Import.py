@@ -291,7 +291,7 @@ if 'df_after_mapping' in st.session_state:
                 
                 new_filename = f"{rid}_CLEANED.csv"
                 st.download_button(
-                    label="⬇️ Download Cleaned Data",
+                    label="⬇️ Download Cleaned Data CSV",
                     data=csv_buffer.getvalue(),
                     file_name=new_filename,
                     mime="text/csv"
