@@ -31,7 +31,6 @@ def load_mappings():
             "_truthy_values_for_emailMarketingOk": ["yes", "true", "1", "y"],
             "firstName": {"First Name": 3, "FirstName": 3},
             "lastName": {"Last Name": 3, "LastName": 3, "Surname": 3}
-            # Add other defaults as needed
         }
         with open(MAPPINGS_FILE, 'w') as f:
             json.dump(default_mappings, f, indent=2)
@@ -68,8 +67,7 @@ st.write("A multi-step tool to clean, format, and validate your guest data.")
 
 uploaded_file = st.file_uploader("Upload your guest CSV file", type="csv")
 
-# --- NEW: Robust State Reset Logic ---
-# If a new file is uploaded, reset the entire state to start fresh
+# --- Robust State Reset Logic ---
 if uploaded_file and st.session_state.get('uploaded_filename') != uploaded_file.name:
     keys_to_reset = [
         'preview_df', 'header_confirmed', 'original_df', 'df_after_split',
@@ -100,7 +98,6 @@ if uploaded_file:
         key='header_selector'
     )
     
-    # Store the index so the dropdown doesn't reset on its own
     st.session_state.header_row_index = options.index(selected_option)
 
     if st.button("Confirm Header and Continue"):
@@ -108,8 +105,8 @@ if uploaded_file:
         uploaded_file.seek(0)
         df = pd.read_csv(uploaded_file, header=header_row_number - 1, dtype=str).fillna('')
         st.session_state.original_df = df
-        st.session_state.header_confirmed = True # Lock in the confirmation
-        st.rerun() # Rerun the script to show the next steps
+        st.session_state.header_confirmed = True
+        st.rerun()
 
 # --- All Subsequent Steps only appear AFTER header is confirmed ---
 if st.session_state.get('header_confirmed'):
@@ -144,7 +141,7 @@ if st.session_state.get('header_confirmed'):
     
     auto_rename_dict = {col: reversed_map[col.lower()] for col in df_step2.columns if col.lower() in reversed_map}
     
-    st.info(f"✅ Automatically mapped **{len(auto_rename_dict)}** columns.")
+    st.info(f"✅ Automatically mapped **{len(auto_rename_dict)}** columns based on confirmed rules.")
     if auto_rename_dict:
         with st.expander("Click here to see the automatically mapped columns"):
             st.table(pd.DataFrame(list(auto_rename_dict.items()), columns=['Your Column', 'Mapped To']))
@@ -160,7 +157,6 @@ if st.session_state.get('header_confirmed'):
                 options = ["-- Leave Unmapped --"] + MANUAL_MAPPING_OPTIONS
                 st.session_state.manual_mappings[col_name] = st.selectbox(f"Map '**{col_name}**'", options, key=f"map_{col_name}")
     
-    # This df is now the basis for the final processing button
     st.session_state.df_after_mapping_display = df_step2
 
     # --- Step 4: Clarify Marketing Consent ---
@@ -180,7 +176,6 @@ if st.session_state.get('header_confirmed'):
 
     # --- Step 5: Combine Notes & Finalize ---
     st.subheader("Step 5: Combine Notes & Finalize")
-    # Use the correctly mapped dataframe to find potential notes
     potential_notes_cols = [
         col for col in st.session_state.df_after_mapping_display.columns
         if col not in STANDARD_COLUMNS
@@ -189,14 +184,11 @@ if st.session_state.get('header_confirmed'):
     rid = st.text_input("Enter your Restaurant ID (RID) for the output filename")
 
     if st.button("🚀 Process, Clean, and Validate"):
-        # Start with the fully mapped df from before this step
         processed_df = st.session_state.df_after_mapping_display.copy()
-
-        # Re-apply manual mappings from the session state widgets
-        manual_rename_dict = {orig: new for orig, new in st.session_state.manual_mappings.items() if new != "-- Leave Unmapped --"}
-        processed_df.rename(columns=manual_rename_dict, inplace=True)
+        manual_rename_dict_final = {orig: new for orig, new in st.session_state.manual_mappings.items() if new != "-- Leave Unmapped --"}
+        processed_df.rename(columns=manual_rename_dict_final, inplace=True)
         
-        # --- LEARNING & FORMATTING (Full Code) ---
+        # --- LEARNING & FORMATTING ---
         # (This section is unchanged, but included for completeness)
         if 'new_truthy_values' in st.session_state and st.session_state.new_truthy_values:
             RENAMING_MAP["_truthy_values_for_emailMarketingOk"].extend(st.session_state.new_truthy_values)
@@ -245,19 +237,33 @@ if st.session_state.get('header_confirmed'):
             processed_df['originalGuestId'] = [uuid.uuid4().hex for _ in range(len(processed_df))]
             st.info("✅ Created a new 'originalGuestId' column with unique 32-character codes for each record.")
 
-        # --- DEDUPLICATION LOGIC (Full Code) ---
-        # (This section is unchanged, but included for completeness)
+        # --- DEDUPLICATION LOGIC ---
         initial_rows_dedup = len(processed_df)
-        contact_cols_dedup = [col for col in ['email', 'phoneNumber', 'mobileNumber'] if col in processed_df.columns]
-        for col in contact_cols_dedup:
-            processed_df[col] = processed_df[col].str.strip().replace('', pd.NA)
-        processed_df['dedup_key'] = processed_df['email'].fillna(processed_df.get('phoneNumber')).fillna(processed_df.get('mobileNumber'))
+        
+        # --- CORRECTED DEDUP KEY LOGIC ---
+        # Replace empty strings with NA to allow for proper filling
+        for col in ['email', 'phoneNumber', 'mobileNumber']:
+            if col in processed_df.columns:
+                processed_df[col] = processed_df[col].str.strip().replace('', pd.NA)
+        
+        # Safely build the deduplication key
+        dedup_key_series = pd.Series(pd.NA, index=processed_df.index, dtype=str)
+        if 'email' in processed_df.columns:
+            dedup_key_series = dedup_key_series.fillna(processed_df['email'])
+        if 'phoneNumber' in processed_df.columns:
+            dedup_key_series = dedup_key_series.fillna(processed_df['phoneNumber'])
+        if 'mobileNumber' in processed_df.columns:
+            dedup_key_series = dedup_key_series.fillna(processed_df['mobileNumber'])
+        processed_df['dedup_key'] = dedup_key_series
+        # --- END OF CORRECTION ---
+        
         agg_rules = {}
         for col in processed_df.columns:
             if col not in ['firstName', 'lastName', 'dedup_key']:
                 if col == 'emailMarketingOk': agg_rules[col] = 'max'
                 elif col == 'guestNotes': agg_rules[col] = lambda x: ', '.join(x.dropna().astype(str).unique())
                 else: agg_rules[col] = 'first'
+        
         if 'firstName' in processed_df.columns and 'lastName' in processed_df.columns and 'dedup_key' in processed_df.columns:
             deduplicated_df = processed_df.groupby(['firstName', 'lastName', 'dedup_key'], as_index=False).agg(agg_rules)
             deduplicated_df.drop(columns=['dedup_key'], inplace=True, errors='ignore')
