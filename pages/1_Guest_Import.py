@@ -31,7 +31,11 @@ def load_mappings():
                 mappings[key] = {item: MAPPING_CONFIRMATION_THRESHOLD for item in value}
         return mappings
     except (FileNotFoundError, json.JSONDecodeError):
-        default_mappings = {"_truthy_values_for_emailMarketingOk": ["yes", "true", "1", "y"]}
+        default_mappings = {
+            "_truthy_values_for_emailMarketingOk": ["yes", "true", "1", "y"],
+            "firstName": {"First Name": 3, "FirstName": 3},
+            "lastName": {"Last Name": 3, "LastName": 3, "Surname": 3}
+        }
         with open(MAPPINGS_FILE, 'w', encoding='utf-8') as f:
             json.dump(default_mappings, f, indent=2)
         return default_mappings
@@ -41,7 +45,7 @@ def save_mappings(mappings):
     with open(MAPPINGS_FILE, 'w', encoding='utf-8') as f:
         json.dump(mappings, f, indent=2)
 
-# --- SCHEMA and RULES ---
+# --- 📜 New Guest Schema and Rules ---
 RENAMING_MAP = load_mappings()
 STANDARD_COLUMNS = [
     'firstName', 'lastName', 'email', 'phoneNumber', 'mobileNumber', 'guestNotes',
@@ -68,23 +72,19 @@ def format_phone_number(phone, hint_country_code=None):
     
     cleaned_phone = "".join(filter(str.isdigit, phone))
     
-    # If the number starts with '+', it's already formatted
     if phone.strip().startswith('+'):
         return phone.strip()
     
-    # If a country hint is provided and the number starts with that code
     if hint_country_code and cleaned_phone.startswith(hint_country_code):
         return f"+{cleaned_phone}"
         
-    # Heuristic for other common international codes without a hint
-    if cleaned_phone.startswith('44') and len(cleaned_phone) > 10: # UK
+    if cleaned_phone.startswith('44') and len(cleaned_phone) > 10:
         return f"+{cleaned_phone}"
-    if cleaned_phone.startswith('1') and (len(cleaned_phone) == 11): # US
+    if cleaned_phone.startswith('1') and (len(cleaned_phone) == 11):
         return f"+{cleaned_phone}"
-    if cleaned_phone.startswith('33') and len(cleaned_phone) > 9: # France
+    if cleaned_phone.startswith('33') and len(cleaned_phone) > 9:
         return f"+{cleaned_phone}"
         
-    # Return the original number if no confident transformation can be made
     return phone
 
 # --- 🎨 App UI ---
@@ -108,7 +108,7 @@ if uploaded_file:
     with col1:
         st.session_state.rid = st.text_input("Enter your Restaurant ID (RID)", value=st.session_state.get('rid', ''))
     with col2:
-        st.session_state.country_hint = st.selectbox("Select the primary country of the data (for phone formatting)", options=["None"] + list(COUNTRY_CODES.keys()), index=0)
+        st.session_state.country_hint = st.selectbox("Select the primary country of the data (for phone formatting)", options=["None"] + list(COUNTRY_CODES.keys()))
 
     if 'preview_df' not in st.session_state:
         try:
@@ -142,7 +142,6 @@ if st.session_state.get('header_confirmed'):
     st.subheader("Data Preview (First 50 Rows)")
     st.dataframe(st.session_state.original_df.head(50))
     
-    # --- Step 2: Handle 'Full Name' ---
     st.subheader("Step 2: Handle 'Full Name' (Optional)")
     df_step1 = st.session_state.original_df.copy()
     with st.expander("Expand if your file has a combined 'Full Name' column"):
@@ -156,43 +155,176 @@ if st.session_state.get('header_confirmed'):
             st.info("✅ 'Full Name' has been split.")
     st.session_state.df_after_split = df_step1
 
-    # --- Step 3: Map Columns ---
     st.subheader("Step 3: Map Your Columns")
-    # ... (This logic is unchanged)
-
-    # --- Step 4: Clarify Marketing Consent ---
-    st.subheader("Step 4: Clarify Marketing Consent (Optional)")
-    # ... (This logic is unchanged)
-
-    # --- Step 5: Combine Notes & Finalize ---
-    st.subheader("Step 5: Combine Notes & Finalize")
-    # ... (This logic is unchanged, except for the RID input which has been moved)
+    df_step2 = st.session_state.df_after_split.copy()
+    st.session_state.manual_mappings = st.session_state.get('manual_mappings', {})
     
+    reversed_map = {}
+    for std, var_dict in RENAMING_MAP.items():
+        if std != 'guestNotes' and isinstance(var_dict, dict):
+            for var, count in var_dict.items():
+                if count >= MAPPING_CONFIRMATION_THRESHOLD:
+                    reversed_map[var.lower()] = std
+    
+    auto_rename_dict = {col: reversed_map[col.lower()] for col in df_step2.columns if col.lower() in reversed_map}
+    
+    st.info(f"✅ Automatically mapped **{len(auto_rename_dict)}** columns based on confirmed rules.")
+    if auto_rename_dict:
+        with st.expander("Click here to see the automatically mapped columns"):
+            st.table(pd.DataFrame(list(auto_rename_dict.items()), columns=['Your Column', 'Mapped To']))
+    
+    df_step2.rename(columns=auto_rename_dict, inplace=True)
+    
+    unmapped_columns = [col for col in df_step2.columns if col not in STANDARD_COLUMNS]
+    if unmapped_columns:
+        st.warning(f"Map any remaining columns. Unmapped columns will be available for 'Guest Notes' in the next step.")
+        cols = st.columns(3)
+        for i, col_name in enumerate(unmapped_columns):
+            with cols[i % 3]:
+                options = ["-- Leave Unmapped --"] + MANUAL_MAPPING_OPTIONS
+                st.session_state.manual_mappings[col_name] = st.selectbox(f"Map '**{col_name}**'", options, key=f"map_{col_name}")
+    
+    st.session_state.df_after_mapping_display = df_step2
+
+    st.subheader("Step 4: Clarify Marketing Consent (Optional)")
+    df_step3 = st.session_state.df_after_mapping_display.copy()
+    if 'emailMarketingOk' in df_step3.columns:
+        truthy_values = [str(v).lower() for v in RENAMING_MAP.get("_truthy_values_for_emailMarketingOk", [])]
+        unique_values = df_step3['emailMarketingOk'].str.lower().str.strip().replace('', pd.NA).dropna().unique()
+        unknown_values = [v for v in unique_values if v not in truthy_values]
+        
+        if unknown_values:
+            with st.expander("Expand to teach the app new marketing consent values", expanded=True):
+                st.warning("Found new values in the marketing column. Please clarify how to handle them.")
+                st.session_state.treat_all_non_blank_as_true = st.checkbox("Treat ALL non-blank values as TRUE", key="treat_all_true")
+                if not st.session_state.treat_all_non_blank_as_true:
+                    st.session_state.new_truthy_values = st.multiselect("OR, select specific values to add to the 'TRUE' list:", options=unknown_values)
+
+    st.subheader("Step 5: Combine Notes & Finalize")
+    potential_notes_cols = [col for col in st.session_state.df_after_mapping_display.columns if col not in STANDARD_COLUMNS]
+    notes_cols_to_combine = st.multiselect("Select columns to combine into 'guestNotes'", options=potential_notes_cols)
+
     if st.button("🚀 Process, Clean, and Validate"):
         processed_df = st.session_state.df_after_mapping_display.copy()
         manual_rename_dict_final = {orig: new for orig, new in st.session_state.manual_mappings.items() if new != "-- Leave Unmapped --"}
         processed_df.rename(columns=manual_rename_dict_final, inplace=True)
         
         # --- LEARNING & FORMATTING ---
-        # ... (emailMarketingOk, notes, and date logic is unchanged)
-
-        # --- UPDATED Phone Number Formatting ---
+        if 'new_truthy_values' in st.session_state and st.session_state.new_truthy_values:
+            RENAMING_MAP["_truthy_values_for_emailMarketingOk"].extend(st.session_state.new_truthy_values)
+            save_mappings(RENAMING_MAP)
+            st.toast("🧠 New marketing consent values learned!")
+        final_truthy_values = [str(v).lower() for v in RENAMING_MAP.get("_truthy_values_for_emailMarketingOk", [])]
+        if 'emailMarketingOk' in processed_df.columns:
+            if st.session_state.get('treat_all_non_blank_as_true', False):
+                processed_df['emailMarketingOk'] = processed_df['emailMarketingOk'].str.strip().ne('')
+            else:
+                processed_df['emailMarketingOk'] = processed_df['emailMarketingOk'].str.lower().isin(final_truthy_values)
+        if notes_cols_to_combine:
+            processed_df['guestNotes'] = processed_df[notes_cols_to_combine].apply(lambda x: ', '.join(x.dropna().astype(str).str.strip().replace('', None).dropna().unique()), axis=1)
+        for date_col in ['dateOfBirth', 'dateOfAnniversary']:
+            if date_col in processed_df.columns:
+                processed_df[date_col] = pd.to_datetime(processed_df[date_col], errors='coerce').dt.strftime('%Y-%m-%d')
+        for name_col in ['firstName', 'lastName']:
+            if name_col in processed_df.columns:
+                 processed_df[name_col] = processed_df[name_col].str.title()
+        
         hint_code = COUNTRY_CODES.get(st.session_state.get('country_hint'))
         for phone_col in ['phoneNumber', 'mobileNumber']:
             if phone_col in processed_df.columns:
                 processed_df[phone_col] = processed_df[phone_col].apply(format_phone_number, args=(hint_code,))
         
         # --- VALIDATION & DELETION ---
-        # ... (This logic is unchanged)
+        initial_rows = len(processed_df)
+        if 'lastName' in processed_df.columns:
+            processed_df = processed_df[processed_df['lastName'].str.strip() != '']
+        else:
+            processed_df = processed_df.iloc[0:0]
+        contact_cols = [col for col in ['email', 'phoneNumber', 'mobileNumber'] if col in processed_df.columns]
+        if contact_cols:
+            all_contacts_blank_mask = processed_df[contact_cols].apply(lambda x: x.str.strip().eq('')).all(axis=1)
+            processed_df = processed_df[~all_contacts_blank_mask]
+        rows_deleted = initial_rows - len(processed_df)
+        st.success(f"✅ Initial validation complete! **{rows_deleted}** invalid rows were deleted.")
 
         # --- originalGuestId LOGIC ---
-        # ... (This logic is unchanged)
-        
+        if 'originalGuestId' in processed_df.columns:
+            initial_id_rows = len(processed_df)
+            processed_df.dropna(subset=['originalGuestId'], inplace=True)
+            processed_df = processed_df[processed_df['originalGuestId'].str.strip() != '']
+            processed_df.drop_duplicates(subset=['originalGuestId'], keep='first', inplace=True)
+            ids_deleted = initial_id_rows - len(processed_df)
+            if ids_deleted > 0:
+                st.warning(f"🚨 Deleted **{ids_deleted}** rows with blank or duplicate 'originalGuestId' values.")
+        else:
+            processed_df['originalGuestId'] = [uuid.uuid4().hex for _ in range(len(processed_df))]
+            st.info("✅ Created a new 'originalGuestId' column.")
+
         # --- DEDUPLICATION LOGIC ---
-        # ... (This logic is unchanged)
+        initial_rows_dedup = len(processed_df)
+        for col in ['email', 'phoneNumber', 'mobileNumber']:
+            if col in processed_df.columns:
+                processed_df[col] = processed_df[col].str.strip().replace('', pd.NA)
+        
+        dedup_key_series = pd.Series(pd.NA, index=processed_df.index, dtype=str)
+        if 'email' in processed_df.columns:
+            dedup_key_series = dedup_key_series.fillna(processed_df['email'])
+        if 'phoneNumber' in processed_df.columns:
+            dedup_key_series = dedup_key_series.fillna(processed_df['phoneNumber'])
+        if 'mobileNumber' in processed_df.columns:
+            dedup_key_series = dedup_key_series.fillna(processed_df['mobileNumber'])
+        processed_df['dedup_key'] = dedup_key_series
+        
+        agg_rules = {}
+        for col in processed_df.columns:
+            if col not in ['firstName', 'lastName', 'dedup_key']:
+                if col == 'emailMarketingOk': agg_rules[col] = 'max'
+                elif col == 'guestNotes': agg_rules[col] = lambda x: ', '.join(x.dropna().astype(str).unique())
+                else: agg_rules[col] = 'first'
+        
+        if 'firstName' in processed_df.columns and 'lastName' in processed_df.columns and 'dedup_key' in processed_df.columns:
+            deduplicated_df = processed_df.groupby(['firstName', 'lastName', 'dedup_key'], as_index=False).agg(agg_rules)
+            deduplicated_df.drop(columns=['dedup_key'], inplace=True, errors='ignore')
+            rows_merged = initial_rows_dedup - len(deduplicated_df)
+            if rows_merged > 0:
+                st.info(f"✨ Merged **{rows_merged}** duplicate rows.")
+            processed_df = deduplicated_df
 
         # --- LEARNING COLUMN MAPPINGS ---
-        # ... (This logic is unchanged)
+        manual_rename_dict_final = {orig: new for orig, new in st.session_state.manual_mappings.items() if new != "-- Leave Unmapped --"}
+        new_mappings_learned = False
+        for original_name, standard_name in manual_rename_dict_final.items():
+            if standard_name not in RENAMING_MAP or not isinstance(RENAMING_MAP[standard_name], dict):
+                RENAMING_MAP[standard_name] = {}
+            current_count = RENAMING_MAP[standard_name].get(original_name, 0)
+            RENAMING_MAP[standard_name][original_name] = current_count + 1
+            new_mappings_learned = True
+        if new_mappings_learned:
+            save_mappings(RENAMING_MAP)
+            st.toast("🧠 Mapping suggestions have been updated!")
             
         # --- FINAL DOWNLOAD ---
-        # ... (This logic is unchanged, but now uses st.session_state.rid)
+        final_cols = [col for col in STANDARD_COLUMNS if col in processed_df.columns]
+        final_df = processed_df[final_cols]
+        st.subheader("Final Processed Data")
+        st.dataframe(final_df.head())
+        
+        rid = st.session_state.get('rid', '')
+        if not rid:
+            st.error("Please enter a Restaurant ID (RID) to generate the download file.")
+        else:
+            if len(final_df) > FILE_ROW_LIMIT:
+                st.warning(f"Data has {len(final_df)} rows. It will be split into multiple files.")
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    num_chunks = (len(final_df) // FILE_ROW_LIMIT) + 1
+                    for i in range(num_chunks):
+                        chunk = final_df.iloc[i*FILE_ROW_LIMIT:(i+1)*FILE_ROW_LIMIT]
+                        chunk_filename = f"{rid}_CLEANED_{i+1}.csv"
+                        zf.writestr(chunk_filename, chunk.to_csv(index=False))
+                st.download_button(label=f"⬇️ Download All Files ({num_chunks}) as ZIP", data=zip_buffer.getvalue(), file_name=f"{rid}_CLEANED_FILES.zip", mime="application/zip")
+            else:
+                csv_buffer = io.StringIO()
+                final_df.to_csv(csv_buffer, index=False)
+                new_filename = f"{rid}_CLEANED.csv"
+                st.download_button(label="⬇️ Download Cleaned Guest Data", data=csv_buffer.getvalue(), file_name=new_filename, mime="text/csv")
