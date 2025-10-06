@@ -17,7 +17,7 @@ MAPPINGS_FILE = 'mappings.json'
 def load_mappings():
     """Loads mappings, ensuring the truthy values list exists and structure is correct."""
     try:
-        with open(MAPPINGS_FILE, 'r') as f:
+        with open(MAPPINGS_FILE, 'r', encoding='utf-8') as f:
             mappings = json.load(f)
         if "_truthy_values_for_emailMarketingOk" not in mappings:
             mappings["_truthy_values_for_emailMarketingOk"] = ["yes", "true", "1", "y"]
@@ -32,13 +32,13 @@ def load_mappings():
             "firstName": {"First Name": 3, "FirstName": 3},
             "lastName": {"Last Name": 3, "LastName": 3, "Surname": 3}
         }
-        with open(MAPPINGS_FILE, 'w') as f:
+        with open(MAPPINGS_FILE, 'w', encoding='utf-8') as f:
             json.dump(default_mappings, f, indent=2)
         return default_mappings
 
 def save_mappings(mappings):
     """Saves updated mappings back to the JSON file."""
-    with open(MAPPINGS_FILE, 'w') as f:
+    with open(MAPPINGS_FILE, 'w', encoding='utf-8') as f:
         json.dump(mappings, f, indent=2)
 
 # --- 📜 New Guest Schema and Rules ---
@@ -67,7 +67,6 @@ st.write("A multi-step tool to clean, format, and validate your guest data.")
 
 uploaded_file = st.file_uploader("Upload your guest CSV file", type="csv")
 
-# --- Robust State Reset Logic ---
 if uploaded_file and st.session_state.get('uploaded_filename') != uploaded_file.name:
     keys_to_reset = [
         'preview_df', 'header_confirmed', 'original_df', 'df_after_split',
@@ -82,10 +81,19 @@ if uploaded_file and st.session_state.get('uploaded_filename') != uploaded_file.
 if uploaded_file:
     st.subheader("Step 1: Confirm Header Row")
 
-    if 'preview_df' not in st.session_state:
+    try:
+        # --- NEW: Try reading with default encoding first ---
+        if 'preview_df' not in st.session_state:
+            uploaded_file.seek(0)
+            st.session_state.preview_df = pd.read_csv(uploaded_file, header=None, nrows=8, dtype=str).fillna('')
+            st.session_state.encoding = 'utf-8' # Store the successful encoding
+    except UnicodeDecodeError:
+        # --- NEW: If default fails, try a more flexible encoding ---
+        st.warning("Could not read the file with standard UTF-8 encoding. Trying a more flexible encoding (latin-1).")
         uploaded_file.seek(0)
-        st.session_state.preview_df = pd.read_csv(uploaded_file, header=None, nrows=8, dtype=str).fillna('')
-
+        st.session_state.preview_df = pd.read_csv(uploaded_file, header=None, nrows=8, dtype=str, encoding='latin-1').fillna('')
+        st.session_state.encoding = 'latin-1' # Store the successful encoding
+    
     options = []
     for index, row in st.session_state.preview_df.iterrows():
         preview_text = ", ".join(row.iloc[:5].dropna().astype(str))
@@ -103,13 +111,16 @@ if uploaded_file:
     if st.button("Confirm Header and Continue"):
         header_row_number = st.session_state.header_row_index + 1
         uploaded_file.seek(0)
-        df = pd.read_csv(uploaded_file, header=header_row_number - 1, dtype=str).fillna('')
+        # --- NEW: Use the detected encoding to read the full file ---
+        df = pd.read_csv(uploaded_file, header=header_row_number - 1, dtype=str, encoding=st.session_state.encoding).fillna('')
         st.session_state.original_df = df
         st.session_state.header_confirmed = True
         st.rerun()
 
 # --- All Subsequent Steps only appear AFTER header is confirmed ---
 if st.session_state.get('header_confirmed'):
+    # The rest of your app logic (unchanged)
+    # ... (Step 2, 3, 4, 5, etc.)
     st.subheader("Data Preview (First 50 Rows)")
     st.dataframe(st.session_state.original_df.head(50))
     
@@ -189,7 +200,6 @@ if st.session_state.get('header_confirmed'):
         processed_df.rename(columns=manual_rename_dict_final, inplace=True)
         
         # --- LEARNING & FORMATTING ---
-        # (This section is unchanged, but included for completeness)
         if 'new_truthy_values' in st.session_state and st.session_state.new_truthy_values:
             RENAMING_MAP["_truthy_values_for_emailMarketingOk"].extend(st.session_state.new_truthy_values)
             save_mappings(RENAMING_MAP)
@@ -209,8 +219,7 @@ if st.session_state.get('header_confirmed'):
             if name_col in processed_df.columns:
                  processed_df[name_col] = processed_df[name_col].str.title()
         
-        # --- VALIDATION & DELETION (Full Code) ---
-        # (This section is unchanged, but included for completeness)
+        # --- VALIDATION & DELETION ---
         initial_rows = len(processed_df)
         if 'lastName' in processed_df.columns:
             processed_df = processed_df[processed_df['lastName'].str.strip() != '']
@@ -223,8 +232,7 @@ if st.session_state.get('header_confirmed'):
         rows_deleted = initial_rows - len(processed_df)
         st.success(f"✅ Initial validation complete! **{rows_deleted}** invalid rows were deleted.")
 
-        # --- originalGuestId LOGIC (Full Code) ---
-        # (This section is unchanged, but included for completeness)
+        # --- originalGuestId LOGIC ---
         if 'originalGuestId' in processed_df.columns:
             initial_id_rows = len(processed_df)
             processed_df.dropna(subset=['originalGuestId'], inplace=True)
@@ -239,14 +247,10 @@ if st.session_state.get('header_confirmed'):
 
         # --- DEDUPLICATION LOGIC ---
         initial_rows_dedup = len(processed_df)
-        
-        # --- CORRECTED DEDUP KEY LOGIC ---
-        # Replace empty strings with NA to allow for proper filling
         for col in ['email', 'phoneNumber', 'mobileNumber']:
             if col in processed_df.columns:
                 processed_df[col] = processed_df[col].str.strip().replace('', pd.NA)
         
-        # Safely build the deduplication key
         dedup_key_series = pd.Series(pd.NA, index=processed_df.index, dtype=str)
         if 'email' in processed_df.columns:
             dedup_key_series = dedup_key_series.fillna(processed_df['email'])
@@ -255,7 +259,6 @@ if st.session_state.get('header_confirmed'):
         if 'mobileNumber' in processed_df.columns:
             dedup_key_series = dedup_key_series.fillna(processed_df['mobileNumber'])
         processed_df['dedup_key'] = dedup_key_series
-        # --- END OF CORRECTION ---
         
         agg_rules = {}
         for col in processed_df.columns:
@@ -272,8 +275,7 @@ if st.session_state.get('header_confirmed'):
                 st.info(f"✨ Merged **{rows_merged}** duplicate rows based on name and contact info.")
             processed_df = deduplicated_df
 
-        # --- LEARNING COLUMN MAPPINGS (Full Code) ---
-        # (This section is unchanged, but included for completeness)
+        # --- LEARNING COLUMN MAPPINGS ---
         manual_rename_dict_final = {orig: new for orig, new in st.session_state.manual_mappings.items() if new != "-- Leave Unmapped --"}
         new_mappings_learned = False
         for original_name, standard_name in manual_rename_dict_final.items():
@@ -286,8 +288,7 @@ if st.session_state.get('header_confirmed'):
             save_mappings(RENAMING_MAP)
             st.toast("🧠 Column mapping suggestions have been updated!")
             
-        # --- FINAL DOWNLOAD (Full Code) ---
-        # (This section is unchanged, but included for completeness)
+        # --- FINAL DOWNLOAD ---
         final_cols = [col for col in STANDARD_COLUMNS if col in processed_df.columns]
         final_df = processed_df[final_cols]
         st.subheader("Final Processed Data")
