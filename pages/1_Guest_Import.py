@@ -31,11 +31,7 @@ def load_mappings():
                 mappings[key] = {item: MAPPING_CONFIRMATION_THRESHOLD for item in value}
         return mappings
     except (FileNotFoundError, json.JSONDecodeError):
-        default_mappings = {
-            "_truthy_values_for_emailMarketingOk": ["yes", "true", "1", "y"],
-            "firstName": {"First Name": 3, "FirstName": 3},
-            "lastName": {"Last Name": 3, "LastName": 3, "Surname": 3}
-        }
+        default_mappings = {"_truthy_values_for_emailMarketingOk": ["yes", "true", "1", "y"]}
         with open(MAPPINGS_FILE, 'w', encoding='utf-8') as f:
             json.dump(default_mappings, f, indent=2)
         return default_mappings
@@ -133,6 +129,15 @@ if uploaded_file:
         header_row_number = st.session_state.header_row_index + 1
         uploaded_file.seek(0)
         df = pd.read_csv(uploaded_file, header=header_row_number - 1, dtype=str, encoding=st.session_state.encoding).fillna('')
+        
+        # --- NEW: Remove empty columns ---
+        original_cols = df.columns.tolist()
+        df.dropna(axis=1, how='all', inplace=True)
+        removed_cols = [col for col in original_cols if col not in df.columns]
+        
+        if removed_cols:
+            st.info(f"🧹 Removed **{len(removed_cols)}** empty columns that contained no data.")
+        
         st.session_state.original_df = df
         st.session_state.header_confirmed = True
         st.rerun()
